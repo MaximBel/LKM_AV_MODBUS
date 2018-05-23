@@ -1,0 +1,6 @@
+eclipse.preferences.version=1
+environment/project/cdt.managedbuild.toolchain.gnu.base.417989329/KERNELDIR/delimiter=\:
+environment/project/cdt.managedbuild.toolchain.gnu.base.417989329/KERNELDIR/operation=append
+environment/project/cdt.managedbuild.toolchain.gnu.base.417989329/KERNELDIR/value=/home/pi/kernel/linux
+environment/project/cdt.managedbuild.toolchain.gnu.base.417989329/append=true
+environment/project/cdt.managedbuild.toolchain.gnu.base.417989329/appendContributed=true
