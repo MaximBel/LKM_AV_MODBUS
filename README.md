@@ -3,6 +3,8 @@ Modbus RTU LKM for RPi3
 
 Uart baud: 115200.
 
+ModBus address: 0x10
+
 Notice: to work with uart You should disable bluetooth module(include appropriate overlay file) and disable console shell in raspi-config
 
 User manual:
