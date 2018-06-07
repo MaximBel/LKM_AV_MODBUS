@@ -5,115 +5,69 @@
  *      Author: pi
  */
 
+// UART driver for Raspberry Pi 3. For more details see tech, documentation to BCM2837 processor.
+
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/init.h>
-
 #include <linux/slab.h>
 #include <linux/gfp.h>
 #include <linux/delay.h>
-
 #include <linux/kthread.h>
-
-//-------------------uart----------------//
-
 #include <asm/io.h>
 #include <linux/serial_core.h>
 #include <linux/kdev_t.h>
 #include <linux/platform_device.h>
 
 #include "ring_buffer.h"
+#include "uart.h"
 
-struct circ_buf modbus_uart_buffer; // size is 128 byte, see the ring_buffer.c
+#define REG_OFFS_DR 0x00 // DR register of UART
+#define REG_OFFS_FR 0x18 // FR register of UART
+#define REG_OFFS_LCRH 0x2C // LCRH register of UART
 
-#define REG_OFFS_DR 0x00
-#define REG_OFFS_FR 0x18
-#define REG_OFFS_LCRH 0x2C
-
-static uint8_t initState = 0; // there is one uart, so we can only init one driver.
+static void read_data_from_uart(uart_control_t * port);
 
 
-void write_data_to_uart(struct uart_port * port, unsigned char * data, uint8_t count) {
-	uint8_t counter;
+void write_data_to_uart(uart_control_t * port, char data) {
 
-	for(counter = 0; counter < count; counter++) {
+	if (GetSpaceInRing(&port->tx_buffer) > 0) {
 
-		while(__raw_readl(port->membase + REG_OFFS_FR) & 0x20) {
-			cpu_relax(); //maybe we can use sleep instead of this?
-		}
-
-		__raw_writel((uint32_t)data[counter], port->membase + REG_OFFS_DR);
+		InsertDataToRing(&port->tx_buffer, data);
 
 	}
 
 }
 
-void read_data_from_uart(struct uart_port * port, struct circ_buf * buffer) {
+char receive_data_from_uart(uart_control_t * port) {
 
-	while(!(__raw_readl(port->membase + REG_OFFS_FR) & 0x10) &&
-			(GetSpaceInRing(buffer) > 0)) {
+	if (GetDataCountInRing(&port->rx_buffer) > 0) {
 
-		InsertDataToRing(buffer, (char) (__raw_readl(port->membase + REG_OFFS_DR) & 0xFF));
+		return GetDataFromRing(&port->rx_buffer);
 
 	}
 
+	return 0;
 }
 
-static int uart_Task(void* Params) {
-	struct uart_port *port = Params;
-
-	while (!kthread_should_stop()) {
-
-		if (!(__raw_readl(port->membase + REG_OFFS_FR) & 0x10)) {
-
-			read_data_from_uart(port, &modbus_uart_buffer);
-
-		}
-
-		if (GetDataCountInRing(&modbus_uart_buffer) > 0) {
-
-			int i, datacount;
-
-			datacount = GetDataCountInRing(&modbus_uart_buffer);
-
-			char * str = kmalloc(datacount, GFP_KERNEL);
-
-			if (str != NULL) {
-
-				for (i = 0; i < datacount; i++) {
-
-					str[i] = GetDataFromRing(&modbus_uart_buffer);
-
-				}
-
-				write_data_to_uart(port, str, datacount);
-
-				kfree(str);
-
-			}
-
-		}
-
-
-		msleep(10);
-
-	}
-
-return 0;
+int rx_data_count(uart_control_t * port) {
+	return GetDataCountInRing(&port->rx_buffer);
 }
 
-int __init uart_init(struct uart_driver *modbus_uart, struct platform_driver *modbus_serial_driver, struct uart_port *port, struct task_struct * uart_thread) {
+int tx_data_count(uart_control_t * port) {
+	return GetDataCountInRing(&port->tx_buffer);
+}
 
-	if(initState == 1) {
+void flush_buffers(uart_control_t * port) {
+	FlushBuffer(&port->tx_buffer);
+	FlushBuffer(&port->rx_buffer);
+}
 
-		return -1; //convert this to linux error code
-
-	}
-
-
+int __init uart_init(struct uart_driver *modbus_uart, struct platform_driver *modbus_serial_driver, uart_control_t *port) {
 	volatile uint32_t * base_addr;
 
 	uart_register_driver(modbus_uart);
+
 	platform_driver_register(modbus_serial_driver);
 
 	// check that we can remap memory to work with uart
@@ -123,64 +77,101 @@ int __init uart_init(struct uart_driver *modbus_uart, struct platform_driver *mo
 	///	return -1;
 	///}
 
-	base_addr = (volatile uint32_t *)ioremap(port->mapbase, port->mapsize);
-	port->membase = (unsigned char __iomem *)base_addr;
+	// remap hard address or uart regs to kernel space
+	base_addr = (volatile uint32_t *)ioremap(port->port.mapbase, port->port.mapsize);
 
-	uart_add_one_port(modbus_uart, &port);
+	port->port.membase = (unsigned char __iomem *)base_addr;
+
+	uart_add_one_port(modbus_uart, &port->port);
 
 	//---enable FIFO mode---//
 
 	uint32_t reg_temp;
-	reg_temp = __raw_readl(port->membase + REG_OFFS_LCRH);
-	__raw_writel(reg_temp | 0x10, port->membase + REG_OFFS_LCRH);
+	reg_temp = __raw_readl(port->port.membase + REG_OFFS_LCRH);
+	__raw_writel(reg_temp | 0x10, port->port.membase + REG_OFFS_LCRH);
 
-	//--------------------//
+	//---init data buffers---//
 
-	Init_Ring_Buffer(&modbus_uart_buffer);
+	Init_Ring_Buffer(&port->rx_buffer);
+	Init_Ring_Buffer(&port->tx_buffer);
 
 	//-------------------//
 
-	uart_thread = kthread_run(uart_Task, (void *)port, "ModBus uart thread");
-
-	if(!uart_thread || uart_thread == ERR_PTR(-ENOMEM)) {
-
-		return -((int)uart_thread);
-
-	}
-
-	//--------------------//
-
-	initState = 1;
+	printk(KERN_INFO "AV_MONITOR_MODBUS: uart driver initialised\r\n");
 
 	return 0;
 
 }
 
-void __exit uart_destroy(struct uart_driver *modbus_uart, struct platform_driver *modbus_serial_driver, struct uart_port *port, struct task_struct * uart_thread) {
+void uart_destroy(struct uart_driver *modbus_uart, struct platform_driver *modbus_serial_driver, uart_control_t *port) {
 
-	if(uart_thread) {
-		kthread_stop(uart_thread);
-	}
+	Destroy_Ring_Buffer(&port->rx_buffer);
+	Destroy_Ring_Buffer(&port->tx_buffer);
 
-	Destroy_Ring_Buffer(&modbus_uart_buffer);
-
-	uart_remove_one_port(modbus_uart, &port);
+	uart_remove_one_port(modbus_uart, &port->port);
 
 	platform_driver_unregister(modbus_serial_driver);
 	uart_unregister_driver(modbus_uart);
 
-	iounmap((volatile uint32_t *)port->membase);
+	iounmap((volatile uint32_t *)port->port.membase);
 
-	initState = 0;
+	printk(KERN_INFO "AV_MONITOR_MODBUS: uart driver unloaded\r\n");
 
 }
 
+void uart_proc(uart_control_t *uart_control) {
+
+	if (!(__raw_readl(uart_control->port.membase + REG_OFFS_FR) & 0x10)) {
+
+		read_data_from_uart(uart_control);
+
+	}
+
+	if (GetDataCountInRing(&uart_control->tx_buffer) > 0) {
+
+		uint8_t counter;
+
+		for (counter = 0; (counter < 20) && (GetDataCountInRing(&uart_control->tx_buffer) > 0) && !(__raw_readl(uart_control->port.membase + REG_OFFS_FR) & 0x20); counter++) {
+
+			__raw_writel((uint32_t) GetDataFromRing(&uart_control->tx_buffer), uart_control->port.membase + REG_OFFS_DR);
+
+		}
+
+	}
+
+	/*if (GetDataCountInRing(&uart_control->rx_buffer) > 0) {
+
+		while ((GetDataCountInRing(&uart_control->rx_buffer) > 0)) {
+
+			__raw_writel((uint32_t) GetDataFromRing(&uart_control->rx_buffer), uart_control->port.membase + REG_OFFS_DR);
+
+		}
+
+
+	}*/
+
+
+}
+
+//-----------------STATIC-----------------//
+
+static void read_data_from_uart(uart_control_t * port) {
+
+	while(!(__raw_readl(port->port.membase + REG_OFFS_FR) & 0x10) &&
+			(GetSpaceInRing(&port->rx_buffer) > 0)) {
+
+		char ch = (char) (__raw_readl(port->port.membase + REG_OFFS_DR) & 0xFF);
+
+		InsertDataToRing(&port->rx_buffer, ch);
+
+	}
+
+}
+
+
+//------------------------------------//
+
+
 EXPORT_SYMBOL(write_data_to_uart);
-
-EXPORT_SYMBOL(read_data_from_uart);
-
 EXPORT_SYMBOL(uart_init);
-
 EXPORT_SYMBOL(uart_destroy);
-
-//----------------------------------//

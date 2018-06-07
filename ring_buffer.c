@@ -11,9 +11,11 @@
 #include <linux/uaccess.h>
 #include <linux/slab.h>
 
+#include "ring_buffer.h"
+
 #define OUT_BUF_SIZE 128 // ACHTUNG!!! Must be the digit with all 1 in binary plus 1(example: 0b01111111 + 1 -> 0b10000000)
 
-void __init Init_Ring_Buffer(struct circ_buf *buff) {
+void Init_Ring_Buffer(struct circ_buf *buff) {
 
 	buff->buf = (char *) kmalloc(OUT_BUF_SIZE, GFP_KERNEL);
 	buff->head = 0;
@@ -21,7 +23,7 @@ void __init Init_Ring_Buffer(struct circ_buf *buff) {
 
 }
 
-void __exit Destroy_Ring_Buffer(struct circ_buf *buff) {
+void Destroy_Ring_Buffer(struct circ_buf *buff) {
 
 	kfree((void *)buff->buf);
 
@@ -73,11 +75,20 @@ u8 GetDataCountInRing(struct circ_buf *buff) {
 
 }
 
+void FlushBuffer(struct circ_buf *buff) {
+
+	buff->tail = 0;
+	buff->head = 0;
+
+}
+
 EXPORT_SYMBOL(Init_Ring_Buffer);
 EXPORT_SYMBOL(Destroy_Ring_Buffer);
 EXPORT_SYMBOL(InsertDataToRing);
 EXPORT_SYMBOL(GetDataFromRing);
 EXPORT_SYMBOL(GetSpaceInRing);
 EXPORT_SYMBOL(GetDataCountInRing);
+EXPORT_SYMBOL(FlushBuffer);
+
 
 //------------------------------------//

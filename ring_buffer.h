@@ -12,17 +12,21 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 
+// WARNING! See source file to know size of buffers
 
-extern void __init Init_Ring_Buffer(struct circ_buf *buff);
 
-extern void __exit Destroy_Ring_Buffer(struct circ_buf *buff);
+void Init_Ring_Buffer(struct circ_buf *buff);
 
-extern void InsertDataToRing(struct circ_buf *buff, char data);
+void Destroy_Ring_Buffer(struct circ_buf *buff);
 
-extern char GetDataFromRing(struct circ_buf *buff);
+void InsertDataToRing(struct circ_buf *buff, char data);
 
-extern u8 GetSpaceInRing(struct circ_buf *buff);
+char GetDataFromRing(struct circ_buf *buff);
 
-extern u8 GetDataCountInRing(struct circ_buf *buff);
+u8 GetSpaceInRing(struct circ_buf *buff);
+
+u8 GetDataCountInRing(struct circ_buf *buff);
+
+void FlushBuffer(struct circ_buf *buff);
 
 #endif /* RING_BUFFER_H_ */

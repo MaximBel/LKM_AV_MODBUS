@@ -29,6 +29,7 @@
 								<option id="gnu.c.compiler.option.include.paths.586662730" name="Include paths (-I)" superClass="gnu.c.compiler.option.include.paths" valueType="includePath">
 									<listOptionValue builtIn="false" value="/home/pi/edu/AutoTrackWorkspace/LKM-modbus/RingBuffer"/>
 									<listOptionValue builtIn="false" value="/home/pi/edu/AutoTrackWorkspace/LKM-modbus/UartDriver"/>
+									<listOptionValue builtIn="false" value="/home/pi/edu/AutoTrackWorkspace/LKM-modbus"/>
 								</option>
 								<inputType id="cdt.managedbuild.tool.gnu.c.compiler.input.2019843906" superClass="cdt.managedbuild.tool.gnu.c.compiler.input"/>
 							</tool>
@@ -43,13 +44,14 @@
 								<option id="gnu.both.asm.option.include.paths.1836613242" name="Include paths (-I)" superClass="gnu.both.asm.option.include.paths" valueType="includePath">
 									<listOptionValue builtIn="false" value="/home/pi/edu/AutoTrackWorkspace/LKM-modbus/RingBuffer"/>
 									<listOptionValue builtIn="false" value="/home/pi/edu/AutoTrackWorkspace/LKM-modbus/UartDriver"/>
+									<listOptionValue builtIn="false" value="/home/pi/edu/AutoTrackWorkspace/LKM-modbus"/>
 								</option>
 								<inputType id="cdt.managedbuild.tool.gnu.assembler.input.1551658693" superClass="cdt.managedbuild.tool.gnu.assembler.input"/>
 							</tool>
 						</toolChain>
 					</folderInfo>
 					<sourceEntries>
-						<entry excluding="UartDriver|RingBuffer" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name=""/>
+						<entry excluding="RingBuffer|UartDriver" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name=""/>
 					</sourceEntries>
 				</configuration>
 			</storageModule>

@@ -10,15 +10,30 @@
 
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/serial_core.h>
+
+typedef struct {
+	struct circ_buf rx_buffer;
+	struct circ_buf tx_buffer;
+	struct uart_port port;
+} uart_control_t;
 
 
+void write_data_to_uart(uart_control_t * port, char data);
 
-extern void write_data_to_uart(struct uart_port * port, unsigned char * data, uint8_t count);
+// can return 0 if there is no data in buffer
+char receive_data_from_uart(uart_control_t * port);
 
-extern void read_data_from_uart(struct uart_port * port, struct circ_buf * buffer);
+int rx_data_count(uart_control_t * port);
 
-extern int __init uart_init(struct uart_driver *modbus_uart, struct platform_driver *modbus_serial_driver, struct uart_port *port, struct task_struct * uart_thread);
+int tx_data_count(uart_control_t * port);
 
-extern void __exit uart_destroy(struct uart_driver *modbus_uart, struct platform_driver *modbus_serial_driver, struct uart_port *port, struct task_struct * uart_thread);
+void flush_buffers(uart_control_t * port);
+
+int __init uart_init(struct uart_driver *modbus_uart, struct platform_driver *modbus_serial_driver, uart_control_t *port);
+
+void uart_destroy(struct uart_driver *modbus_uart, struct platform_driver *modbus_serial_driver, uart_control_t *port);
+
+void uart_proc(uart_control_t *uart_control);
 
 #endif /* UART_H_ */

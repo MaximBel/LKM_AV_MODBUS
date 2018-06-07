@@ -6,113 +6,64 @@
 #include <linux/timekeeping.h>
 
 #include "crc16.h"
+#include "ModBus.h"
 
 #define IGNORE_FRAME_ERROR
 
 #define TO_PAUSE(_sp_) (long)7*115200/(_sp_)
 #define TO_FRAME(_sp_) (long)3*115200/(_sp_)
 
-//#define MASTER 1
-//#define SLAVE 0
 //-----------------------------------------------------------------------------
-typedef enum {
-	MD_NONE = 0x0, MD_START, MD_STOP, MD_PAUSE_START, MD_PAUSE_STOP
-} ModeBus_Mode;
+#define FORM_ERROR(_code_) {Send(Work,Work->Addr);\
+                            Send(Work,Funct | 0x80 ); \
+                            Send(Work,(_code_));\
+                           }
 //-----------------------------------------------------------------------------
-typedef enum {
-	NO_ERROR = 0, FRAME_ERROR, START_ERROR, CRC_ERROR
-} ModeBus_Error;
-
-#define BUFFER_SIZE 128
+// special for code 03
+#define FORM_CODE_03(VAL,_MAX_) { if((VAL)<1 || (VAL)>(_MAX_)){\
+                           FORM_ERROR(3); \
+                        break;}\
+                     }
+#define FORM_CODE_02 {FORM_ERROR(2); break;}
 //-----------------------------------------------------------------------------
 
-typedef struct {
-	uint32_t timer_start_ms;
-	uint32_t timer_delay_ms;
-} timer;
+#define REFRESH_TRGGER {}
 
-typedef struct {
-	ModeBus_Mode ModBusMode;
-	unsigned char Addr;
-	uint16_t ReInitTime;
-	uint16_t CRC_pack;
-	uint16_t TOPAUSE;
-	uint16_t TOFRAME_ERR;
-	ModeBus_Error Error;
-	unsigned char Pack_Buffer[BUFFER_SIZE];
-	unsigned char TimerWork;
-	uint16_t Pack_Count;
-	unsigned char Master;
-	timer Pause_Timer;
-	timer Frame_Timer;
-	uint16_t Error_Frame_Count;
-	void (*ChangeMode)(char);
-	void (*putch)(char);
-	char (*getch)(void);
-	void (*flush)(void);
-	int (*tx_count)(void);
-	int (*rx_count)(void);
-	void (*ProcPack)(unsigned char *, uint16_t);
-	void (*SetParam)(uint16_t Addr, unsigned char *Val, uint16_t Size);
-	uint16_t (*GetParam)(uint16_t Addr);
-	uint16_t (*CheckAddrR)(uint16_t Addr);
-	uint16_t (*CheckAddrW)(uint16_t Addr);
-	void (*ReciveByte)(void *);
-	void (*SendPackage)(void *, unsigned char *, unsigned char);
-} ModBusPort;
+#define READ_USER_REG \
+                for (j=0; j<StCount; j++) \
+                { \
+                  Temp = Work->GetParam (StAddr+j); \
+                  Send(Work,(Temp>>8)&0xff); \
+                  Send(Work,Temp&0xff);      \
+                }
 
-ModBusPort av_modbus_init_struct;
+#define WRITE_USER_REG \
+                Work->SetParam (StAddr,  \
+                                (unsigned char*)(Work->Pack_Buffer+7),\
+                                StCount);
 
 //-----------------------------------------------------------------------------
 const char mID_LENGTH[4] = { 4, 16 + 2, 5, 6 };
 const char ID_VALUE[4][25] = { "AV_PULT_MODBUS", "0x00", "1", "AV" };
 
 //--------------------------------------timer functions---------------------------
-
-void timer_set(timer * tim, uint16_t delay) {
-
-	if (tim == NULL)
-		return;
-
-	uint64_t time_ns = ktime_get_ns();
-
-	tim->timer_start_ms = do_div(time_ns, 1000); // specific division for 64-bit number
-
-	tim->timer_delay_ms = delay;
-
-}
-
-uint8_t timer_expired(timer * tim) {
-
-	uint64_t time_ns = ktime_get_ns();
-
-	if ((do_div(time_ns, 1000) - tim->timer_start_ms) > tim->timer_delay_ms) {
-
-		return 1;
-
-	} else {
-
-		return 0;
-
-	}
-
-}
-
+static void timer_set(timer * tim, uint16_t delay);
+static uint8_t timer_expired(timer * tim);
+static void timer_stop(timer * tim);
 //-----------------------------------------------------------------------------
-void sendpack(void * p, unsigned char * buf, unsigned char count);
-void ModBusProcessing(ModBusPort *);
 //-----------------------------------------------------------------------------
-void ReciveByte(void * Work) {
-	if (timer_expired(&((ModBusPort *)Work)->Frame_Timer)) {
-
-		((ModBusPort *)Work)->Error_Frame_Count++;
-	}
-	timer_set(&((ModBusPort *)Work)->Frame_Timer, ((ModBusPort *)Work)->TOFRAME_ERR);
-	timer_set(&((ModBusPort *)Work)->Pause_Timer, ((ModBusPort *)Work)->TOPAUSE);
-
-}
+static void Send(ModBusPort *Port, unsigned char val);
 //-----------------------------------------------------------------------------
-void ModBusInit(ModBusPort *Work, unsigned long Speed) {
+static void SendCRC(ModBusPort *Port);
+//--------------------------------------------------------------------------
+static void sendpack(void * p, unsigned char * buf, unsigned char count);
+static void ModBusProcessing(ModBusPort *);
+//-----------------------------------------------------------------------------
+static void ReciveByte(void * Work);
+//-----------------------------------------------------------------------------
+
+
+void ModBusInit(ModBusPort *Work, uint32_t Speed) {
 	Work->SendPackage = sendpack;
 	Work->ReciveByte = ReciveByte;
 	Work->TOPAUSE = TO_PAUSE(Speed);
@@ -151,6 +102,7 @@ void ModBusModeControl(ModBusPort *Int) {
 		//  break;
 //-------------
 	case MD_START:
+
 		if (Work->Pack_Count && timer_expired(&Work->Pause_Timer)) {
 			if (Work->Error_Frame_Count > 1) {
 				Work->ModBusMode = MD_NONE;
@@ -159,9 +111,11 @@ void ModBusModeControl(ModBusPort *Int) {
 				Work->ModBusMode = MD_STOP;
 			}
 			Work->Error_Frame_Count = 0;
-			//timer_stop(&Work->Frame_Timer);
+			timer_stop(&Work->Frame_Timer);
 		}
+
 		while (Work->rx_count()) {
+
 			Work->Pack_Buffer[Work->Pack_Count] = Work->getch();
 			Work->Pack_Count++;
 			timer_set(&Work->Pause_Timer, Work->TOPAUSE);
@@ -171,6 +125,7 @@ void ModBusModeControl(ModBusPort *Int) {
 			break;
 //-------------
 	case MD_STOP:
+
 		if (CRC16m(Work->Pack_Buffer, Work->Pack_Count)) {
 			Work->Error = NO_ERROR;
 
@@ -199,12 +154,59 @@ void ModBusModeControl(ModBusPort *Int) {
 	};
 }
 //-----------------------------------------------------------------------------
+static void timer_set(timer * tim, uint16_t delay) {
+
+	if (tim == NULL)
+		return;
+
+	uint64_t time_ns = ktime_get_ns();
+
+	tim->timer_start_ms = do_div(time_ns, 1000); // specific division for 64-bit number
+
+	tim->timer_delay_ms = delay;
+
+	tim->started = 1;
+
+}
+
+static uint8_t timer_expired(timer * tim) {
+
+	if(tim->started == 0) {
+
+		return 0;
+
+	}
+
+
+	uint64_t time_ns = ktime_get_ns();
+
+	if ((do_div(time_ns, 1000) - tim->timer_start_ms) > tim->timer_delay_ms) {
+
+		return 1;
+
+	} else {
+
+		return 0;
+
+	}
+
+}
+
+static void timer_stop(timer * tim) {
+
+	tim->started = 0;
+
+}
+
+//----------------------------------------------------------------------------
+
+
 volatile ushort j;
 //-----------------------------------------------------------------------------  
 //-----------------------------------------------------------------------------
 //-----------------------------------------------------------------------------
 //-----------------------------------------------------------------------------        
-void sendpack(void * Port, unsigned char * buf, unsigned char count) {
+static void sendpack(void * Port, unsigned char * buf, unsigned char count) {
 	if (!(ModBusPort *) Port)
 		return;
 	unsigned int i;
@@ -218,47 +220,18 @@ void sendpack(void * Port, unsigned char * buf, unsigned char count) {
 	((ModBusPort *) Port)->putch((((ModBusPort *) Port)->CRC_pack >> 8) & 0xFF);
 }
 //-----------------------------------------------------------------------------
-void Send(ModBusPort *Port, unsigned char val) {
+static void Send(ModBusPort *Port, unsigned char val) {
 	Port->putch(val);
 	Port->CRC_pack = CRC16(Port->CRC_pack, val);
 }
 //-----------------------------------------------------------------------------
-void SendCRC(ModBusPort *Port) {
+static void SendCRC(ModBusPort *Port) {
 	Port->putch(Port->CRC_pack & 0xFF);
 	Port->putch((Port->CRC_pack >> 8) & 0xFF);
 
 }
 //-----------------------------------------------------------------------------
-#define FORM_ERROR(_code_) {Send(Work,Work->Addr);\
-                            Send(Work,Funct | 0x80 ); \
-                            Send(Work,(_code_));\
-                           }
-//-----------------------------------------------------------------------------
-// special for code 03
-#define FORM_CODE_03(VAL,_MAX_) { if((VAL)<1 || (VAL)>(_MAX_)){\
-                           FORM_ERROR(3); \
-                        break;}\
-                     }
-#define FORM_CODE_02 {FORM_ERROR(2); break;}
-//-----------------------------------------------------------------------------
-
-#define REFRESH_TRGGER {}
-
-#define READ_USER_REG \
-                for (j=0; j<StCount; j++) \
-                { \
-                  Temp = Work->GetParam (StAddr+j); \
-                  Send(Work,(Temp>>8)&0xff); \
-                  Send(Work,Temp&0xff);      \
-                }    
-
-#define WRITE_USER_REG \
-                Work->SetParam (StAddr,  \
-                                (unsigned char*)(Work->Pack_Buffer+7),\
-                                StCount);
-
-//-----------------------------------------------------------------------------
-void ModBusProcessing(ModBusPort *Work) {
+static void ModBusProcessing(ModBusPort *Work) {
 	unsigned char TAddr = 0;
 	unsigned char Funct = 0;
 	uint16_t StAddr = 0;
@@ -407,7 +380,15 @@ void ModBusProcessing(ModBusPort *Work) {
 
 }
 
-EXPORT_SYMBOL(av_modbus_init_struct);
+static void ReciveByte(void * Work) {
+	if (timer_expired(&((ModBusPort *)Work)->Frame_Timer)) {
 
-EXPORT_SYMBOL( ModBusModeControl);
-EXPORT_SYMBOL( ModBusInit);
+		((ModBusPort *)Work)->Error_Frame_Count++;
+	}
+	timer_set(&((ModBusPort *)Work)->Frame_Timer, ((ModBusPort *)Work)->TOFRAME_ERR);
+	timer_set(&((ModBusPort *)Work)->Pause_Timer, ((ModBusPort *)Work)->TOPAUSE);
+
+}
+
+EXPORT_SYMBOL(ModBusModeControl);
+EXPORT_SYMBOL(ModBusInit);

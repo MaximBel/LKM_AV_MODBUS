@@ -1,4 +1,5 @@
 
+#include "crc16.h"
 #include <linux/types.h>
 
 static const uint8_t auchCRCHi[256] = { 0x00, 0xC1, 0x81, 0x40, 0x01, 0xC0,
